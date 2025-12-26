@@ -96,22 +96,133 @@ static size_t unpack_mqtt_connect(const unsigned char *buf, mqtt_header *hdr,mqt
     return len;
 }
 
-
+//解包publish报文，返回报文剩余长度
 static size_t unpack_mqtt_publish(const unsigned char *buf ,mqtt_header *hdr,mqtt_packet* pkt){
     mqtt_publish publish ={.header = *hdr};
     pkt->publish=publish;
 
     size_t len=mqtt_decode_length((const unsigned char**)&buf);
-
+    
     pkt->publish.topic_len=unpack_string16((const uint16_t**)&buf,(uint8_t*)pkt->publish.topic);
 
     size_t message_len=len;
 
     //pkt_id只会在QoS大于0时候出现，用于进行消息确认
     if(pkt->publish.header.bits.qos>AT_MOST_ONCE){
-        pkt->publish.pkt.id=
+        pkt->publish.pkt_id=unpack_u16((const uint8_t *)&buf);
+        message_len -= sizeof(uint16_t);
+
     }
+    message_len-=(sizeof(uint16_t)+pkt->publish.topic_len);
+    pkt->publish.payloadlen=message_len;
+    pkt->publish.payload=malloc(message_len+1);
+    unpack_bytes((const uint8_t**)&buf,message_len,pkt->publish.payload);
+    return len;
+
 }
+
+static size_t unpack_subscribe(const unsigned char* buf,mqtt_header *hdr,mqtt_packet* pkt){
+
+    mqtt_subscribe subscribe = {.header=hdr};
+    
+    size_t len=mqtt_decode_length((const unsigned char **)&buf);
+    
+    size_t remaining_bytes=(len-sizeof(uint16_t));
+
+    //报文标识符
+    unpack_u16((const uint8_t **)&buf);
+    remaining_bytes-=sizeof(uint16_t);
+
+    //对于mqtt3,没有属性（Properties）字段
+
+    //解析有效载荷
+    int i=0;
+    while(remaining_bytes>0){
+        //为tuples分配内存
+        subscribe.tuples=realloc(subscribe.tuples,(i+1)*(sizeof(*subscribe.tuples)));
+        
+        subscribe.tuples[i].topic_len=unpack_string16((const uint8_t**)&buf,&(subscribe.tuples[i].topic));
+        remaining_bytes-=(subscribe.tuples[i].topic_len+sizeof(uint16_t));
+
+        //获取qos等级
+        subscribe.tuples[i].qos=unpack_u8((unsigned char **)&buf);
+        remaining_bytes-=sizeof(uint8_t);
+        i++;
+
+    }
+    //i是tuples的数量和报文长度
+    subscribe.tuples_len=i;
+    pkt->subscribe=subscribe;
+    return len;
+
+}
+
+
+static size_t unpack_mqtt_unsubscribe(const unsigned char *buf,mqtt_header* hdr ,mqtt_packet *pkt){
+
+    mqtt_unsubscribe unsubscribe = {.header=*hdr};
+
+    size_t len=mqtt_decode_length((const unsigned char **)&buf);
+    
+    size_t remaining_bytes=(len-sizeof(uint16_t));
+
+    //报文标识符
+    unpack_u16((const uint8_t **)&buf);
+    remaining_bytes-=sizeof(uint16_t);
+
+    //对于mqtt3,没有属性（Properties）字段
+
+    //解析有效载荷
+    int i=0;
+    while(remaining_bytes>0){
+        //为tuples分配内存
+        unsubscribe.tuples=realloc(unsubscribe.tuples,(i+1)*(sizeof(*unsubscribe.tuples)));
+        
+        unsubscribe.tuples[i].topic_len=unpack_string16((const uint8_t**)&buf,&(unsubscribe.tuples[i].topic));
+        remaining_bytes-=(unsubscribe.tuples[i].topic_len+sizeof(uint16_t));
+
+        i++;
+    }
+    unsubscribe.tuples_len=i;
+    pkt->unsubscribe = unsubscribe;
+    return len;
+
+}
+
+typedef size_t mqtt_unpack_handler (const unsigned char **,mqtt_header* ,mqtt_packet*);
+
+static mqtt_unpack_handler *unpack_handlers[11]={
+    NULL,
+    unpack_mqtt_connect,
+    NULL,
+    unpack_mqtt_publish,
+    unpack_mqtt_ack,
+    unpack_mqtt_ack,
+    unpack_mqtt_ack,
+    unpack_mqtt_ack,
+    unpack_mqtt_subscribe,
+    NULL,
+    unpack_mqtt_unsubscribe
+};
+
+//将解包函数通过指针函数调用的形式进行使用。
+int unpack_mqtt_packet(const unsigned char *buf ,mqtt_header*hdr ,mqtt_packet* pkt){
+    int rc =0;
+    unsigned char type = *buf;
+    mqtt_header header={.byte=type};
+
+    if(header.bits.type==DISCONNECT||header.bits.type==PINGREQ||header.bits.type==PINGRESP){
+
+        pkt->header=header;
+
+    }
+    else{
+        rc=unpack_handlers[header.bits.type](++buf,&header,pkt);
+    }
+    return rc;
+
+}
+
 
 
 

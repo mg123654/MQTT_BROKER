@@ -15,6 +15,8 @@
 #define UNSUBACK_BYTE 0xB0
 #define PINGRESP_BYTE 0xD0
 
+#define MQTT_HEADER_LEN 2
+
 /* Message types */
 enum packet_type {
     CONNECT     = 1,

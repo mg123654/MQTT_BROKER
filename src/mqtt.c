@@ -22,7 +22,7 @@ static unsigned char *pack_mqtt_ack(const mqtt_packet *);
 static unsigned char *pack_mqtt_connack(const  mqtt_packet *);
 static unsigned char *pack_mqtt_suback(const mqtt_packet *);
 static unsigned char *pack_mqtt_publish(const mqtt_packet *);
-
+int unpack_mqtt_packet(const unsigned char *buf ,mqtt_header*hdr ,mqtt_packet* pkt);
 //
 static const int MAX_LEN_BYTES = 4;
 
@@ -304,7 +304,7 @@ void mqtt_packet_release(mqtt_packet *pkt, unsigned type) {
 
 typedef unsigned char *mqtt_pack_handler(const mqtt_packet*);
 //定义指针函数
-static mqtt_pack_handler *hadlers[13]={
+static mqtt_pack_handler *pack_packet_handlers[13]={
     NULL,
     NULL,
     pack_mqtt_connack,
@@ -315,13 +315,15 @@ static mqtt_pack_handler *hadlers[13]={
     pack_mqtt_ack,
     NULL,
     pack_mqtt_suback,
-    NULL,pack_mqtt_ack,
+    NULL,
+    pack_mqtt_ack,
     NULL
 };
 
 
-//将报文结构体生成报文数据包。
-static unsigned char* pack_mqt_header(const mqtt_header*hdr){
+//将报文结构体生成报文数据包,解析结构体生成、分配报文内存，返回报文地址。
+
+static unsigned char* mqtt_pack_header(const mqtt_header*hdr){
 
     unsigned char *packed=malloc(MQTT_HEADER_LEN);
     unsigned char *ptr=packed;
@@ -330,7 +332,86 @@ static unsigned char* pack_mqt_header(const mqtt_header*hdr){
     mqtt_encode_length(ptr,0);
     return packed;
 }
-#include <stdio.h>
-int main(){
-    return 0;
+
+
+static unsigned char* mqtt_pack_ack(const mqtt_packet* pkt){
+    unsigned char *packed=malloc(MQTT_ACK_LEN);
+    unsigned char *ptr=packed;
+    pack_u8(&ptr,(uint8_t)pkt->ack.header.byte);
+    int len=mqtt_encode_length(ptr,MQTT_ACK_LEN-2);
+    ptr+=len;
+    pack_u16(&ptr,pkt->ack.pkt_id);
+
+    return packed;
 }
+
+static unsigned char* mqtt_pack_suback(const mqtt_packet* pkt){
+    unsigned char* packed=malloc(MQTT_HEADER_LEN+sizeof(uint16_t)+pkt->suback.rcslen);
+    unsigned char* ptr = packed;
+    pack_u8(&ptr,(uint8_t)pkt->suback.header.byte);
+    int step=mqtt_encode_length(ptr,sizeof(uint16_t)+pkt->suback.rcslen);
+    ptr+=step;
+    pack_u16(&ptr,pkt->suback.pkt_id);
+    //返回码写入
+    for(int i=0;i<pkt->suback.rcslen;i++){
+        pack_u8(&ptr,(uint8_t)pkt->suback.rcs[i]);
+    }
+   return packed;
+
+}
+
+static unsigned char* mqtt_pack_connack(const mqtt_packet *pkt){
+    unsigned char* packed = malloc(MQTT_ACK_LEN);
+    unsigned char* ptr = packed;
+    pack_u8(&ptr,pkt->connack.header.byte);
+    int step=mqtt_encode_length(ptr,2);
+    ptr+=step;
+    pack_u8(&ptr,pkt->connack.byte);
+    pack_u8(&pkt,pkt->connack.rc);
+    return packed;
+
+}
+
+static unsigned char* mqtt_pack_publish(const mqtt_packet* pkt){
+    //首先计算报文总长度
+    size_t pktlen = MQTT_HEADER_LEN+sizeof(uint16_t)+pkt->publish.topic_len+pkt->publish.payload;
+    if (pkt->header.bits.qos>AT_MOST_ONCE){
+        pktlen+=sizeof(uint16_t);
+    } 
+    int remaininglen_offset=0;
+    //前面包含一个字节的剩余长度，现在根据总剩余长度计算变长长度字节应该还需要几个
+    if(pktlen-1>0x200000)
+        remaininglen_offset=3;
+    else if(pktlen-1>0x4000)
+        remaininglen_offset=2;
+    else if (pktlen-1>0x80)
+        remaininglen_offset=1;
+    pktlen+=remaininglen_offset;
+    unsigned char *packed=malloc(pktlen);
+    unsigned char *ptr=packed;
+    
+    pack_u8(&ptr,pkt->publish.header.byte);
+    int step = mqtt_encode_length(ptr,pktlen-MQTT_HEADER_LEN-remaininglen_offset);
+    ptr+=step;
+
+    //两个字节的topiclen,写入主题名称功能，根据Qos等级写入pkt_id,写入有效载荷。
+    pack_u16(&ptr,pkt->publish.topic_len);
+    pack_bytes(&ptr,pkt->publish.topic);
+    if (pkt->header.bits.qos>AT_MOST_ONCE){
+        pack_u16(&ptr,pkt->publish.pkt_id);
+    } 
+    pack_bytes(&ptr,pkt->publish.payload);
+    return packed;
+}
+
+//打包函数通用函数，根据类型返回对应的打包函数指针
+unsigned char *pack_mqtt_packet(const mqtt_packet* pkt,unsigned type){
+    //对于PINGREQ和PINGRESP，只需要一个二个字节固定头。
+    if (type == PINGREQ || type == PINGRESP)
+        return pack_mqtt_headlers(&pkt->header);
+    return pack_packet_handlers[type](pkt);
+}
+
+
+
+

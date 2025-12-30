@@ -16,7 +16,7 @@
 #define PINGRESP_BYTE 0xD0
 
 #define MQTT_HEADER_LEN 2
-
+#define MQTT_ACK_LEN    4
 /* Message types */
 enum packet_type {
     CONNECT     = 1,
